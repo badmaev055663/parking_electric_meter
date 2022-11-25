@@ -1,16 +1,24 @@
 import serial
 import crcmod
 
+crc8 = None
+ser = None
 
-ser = serial.Serial('/dev/ttyUSB0')
-ser.rs485_mode
-ser.timeout = 0.5
-ser.baudrate = 9600
+def connect(port: str):
+	global ser
+	global crc8
 
-crc8 = crcmod.mkCrcFun(poly=0x1B5, initCrc=0, rev=False)
+	ser = serial.Serial(port)
+	ser.rs485_mode
+	ser.timeout = 0.5
+	ser.baudrate = 9600
+	crc8 = crcmod.mkCrcFun(poly=0x1B5, initCrc=0, rev=False)
 
-if ser.is_open == False:
-    ser.open()
+	if ser.is_open == False:
+		ser.open()
+
+def close():
+	ser.close()
 
 
 END = bytearray.fromhex("c0")
@@ -76,6 +84,7 @@ def parse_response(response: bytearray)-> bytearray:
 		return None
 
 	crc = response[resp_len - 2]
+	# possible trouble
 	if crc != crc8(response_body):
 		print("response: crc failed")
 		return None
@@ -95,19 +104,21 @@ def parse_payload(payload: bytearray)-> bytearray:
 	#addrL = payload[2]
 
 	data = payload[3:]
-	print("data: " + data.hex())
 
 	return data
 
 
 def send_request(request_type: str, request_data: str = None)-> bytearray:
-	request_data_bytes = bytearray.fromhex(request_data)
-	request_body = make_request_body(request_type, request_data_bytes)
+	if request_data != None:
+		request_data_bytes = bytearray.fromhex(request_data)
+		request_body = make_request_body(request_type, request_data_bytes)
+	else:
+		request_body = make_request_body(request_type)
 
 	if request_body == None:
 		print('failed to create request body')
 		return None
-	
+
 	request = make_requst(request_body)
 	ser.write(request)
 	response = ser.readline()
@@ -118,8 +129,6 @@ def send_request(request_type: str, request_data: str = None)-> bytearray:
 		return None
 	else:
 		data = parse_payload(payload)
-		if data == None:
-			return None
 		return data
 
 
@@ -131,16 +140,9 @@ def bcd_decode(bcd_byte: int)-> int:
 	return res
 
 
-def parse_get_energy_data(data: bytearray):
+def parse_get_energy_data(data: bytearray) -> list:
 	day = bcd_decode(data[0])
 	month = bcd_decode(data[1])
 	year = bcd_decode(data[2])
 	energy = int.from_bytes(data[3:], byteorder='little', signed=False)
-	print("date: %d:%d:%d" % (day, month, year))
-	print("energy: %d" % (energy))
-
-
-data = send_request("012f", "0000")
-if data != None:
-	parse_get_energy_data(data)
-ser.close()
+	return list[day, month, year, energy]
