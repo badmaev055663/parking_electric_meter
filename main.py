@@ -10,14 +10,14 @@ ser.baudrate = 9600
 crc8 = crcmod.mkCrcFun(poly=0x1B5, initCrc=0, rev=False)
 
 if ser.is_open == False:
-        ser.open()
+    ser.open()
 
 
 END = bytearray.fromhex("c0")
 ESC = bytearray.fromhex("db")
 OPT = bytearray.fromhex("48")
 
-# как узнать адрес контроллера ??
+# наш адрес захардкожен
 src = bytearray.fromhex("0000")
 
 # широковещание но вообще адрес счетчика - 5 последних цифр серийного номера
@@ -31,16 +31,28 @@ def make_requst(request_body: bytearray) -> bytearray:
 	request = request + bytearray.fromhex(crc[2:])
 	request = END + request + END
 
-	print("request: 0x" + request.hex())
 	return request
 
-def make_request_body(data: bytearray = None) -> bytearray:
+def make_request_body(command: str, data: bytearray = None) -> bytearray:
 	passw = bytearray.fromhex("00000000")
-	#passw = bytearray.fromhex("31de0b00")
-	serv = bytes([int('11010000', 2)]) # ПОРЯДОК БИТОВ???
-	addrL = bytearray.fromhex("00")
-	addrH = bytearray.fromhex("01")
+	if len(command) != 4:
+		print("request: invalid command")
+		return None
+
+	if data != None:
+		data_len = bin(len(data))
+	else:
+		data_len = bin(0)
+
+	serv_raw = '1101' + data_len[2:].zfill(4)
+
+	serv = bytes([int(serv_raw, 2)])
+	addrL = bytearray.fromhex(command[0:2])
+	addrH = bytearray.fromhex(command[2:])
+
 	request_body = passw + serv + addrL + addrH
+	if data != None:
+		request_body += data
 
 	return request_body
 
@@ -75,9 +87,12 @@ def parse_payload(payload: bytearray)-> bytearray:
 	serv = serv_raw[2:].zfill(8)
 	if serv[0] != '0' or serv[1:4] != '101':
 		print("invalid serv field: " + serv)
-	# собрать код команды ??
-	addrH = payload[1]
-	addrL = payload[2]
+		print("error code:", payload[3])
+		return None
+
+	# собрать код команды сделать доп проверку ??
+	#addrH = payload[1]
+	#addrL = payload[2]
 
 	data = payload[3:]
 	print("data: " + data.hex())
@@ -85,20 +100,47 @@ def parse_payload(payload: bytearray)-> bytearray:
 	return data
 
 
+def send_request(request_type: str, request_data: str = None)-> bytearray:
+	request_data_bytes = bytearray.fromhex(request_data)
+	request_body = make_request_body(request_type, request_data_bytes)
 
-request_body = make_request_body()
-request = make_requst(request_body)
-
-while True:
+	if request_body == None:
+		print('failed to create request body')
+		return None
+	
+	request = make_requst(request_body)
 	ser.write(request)
-	if KeyboardInterrupt == True:
-		break
 	response = ser.readline()
 	payload = parse_response(response)
+
 	if payload == None:
-		print("invalid packet")
+		print("invalid response packet")
+		return None
 	else:
 		data = parse_payload(payload)
+		if data == None:
+			return None
+		return data
 
 
+def bcd_decode(bcd_byte: int)-> int:
+	bcd = bin(bcd_byte)
+	bcd = bcd[2:].zfill(8)
+	res = int(bcd[0:4], 2) * 10
+	res += int(bcd[4:], 2)
+	return res
+
+
+def parse_get_energy_data(data: bytearray):
+	day = bcd_decode(data[0])
+	month = bcd_decode(data[1])
+	year = bcd_decode(data[2])
+	energy = int.from_bytes(data[3:], byteorder='little', signed=False)
+	print("date: %d:%d:%d" % (day, month, year))
+	print("energy: %d" % (energy))
+
+
+data = send_request("012f", "0000")
+if data != None:
+	parse_get_energy_data(data)
 ser.close()
