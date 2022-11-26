@@ -10,7 +10,7 @@ def connect(port: str):
 
 	ser = serial.Serial(port)
 	ser.rs485_mode
-	ser.timeout = 0.5
+	ser.timeout = 0.7
 	ser.baudrate = 9600
 	crc8 = crcmod.mkCrcFun(poly=0x1B5, initCrc=0, rev=False)
 
@@ -24,6 +24,8 @@ def close():
 END = bytearray.fromhex("c0")
 ESC = bytearray.fromhex("db")
 OPT = bytearray.fromhex("48")
+PAD1 = bytearray.fromhex("dc")
+PAD2 = bytearray.fromhex("dd")
 
 # наш адрес захардкожен
 src = bytearray.fromhex("0000")
@@ -31,12 +33,30 @@ src = bytearray.fromhex("0000")
 # широковещание но вообще адрес счетчика - 5 последних цифр серийного номера
 dst = bytearray.fromhex("ffff")
 
+# проебразовать служебные байты в байты данных
+def convert(data:bytearray)->bytearray:
+	i = 0
+	l = len(data)
+	while i < (l - 1):
+		if data[i] == ESC[0] and data[i + 1] == PAD1[0]:
+			data[i:i + 2] = END
+			l -= 1
+		if data[i] == ESC[0] and data[i + 1] == PAD2[0]:
+			data[i:i + 2] = ESC
+			l -= 1
+		i += 1
+
+	return data
+
 
 def make_requst(request_body: bytearray) -> bytearray:
 	request = OPT + dst + src + request_body
 
 	crc = hex(crc8(request))
-	request = request + bytearray.fromhex(crc[2:])
+	crc = crc[2:]
+	if len(crc) == 1:
+		crc = "0" + crc
+	request = request + bytearray.fromhex(crc)
 	request = END + request + END
 
 	return request
@@ -84,6 +104,7 @@ def parse_response(response: bytearray)-> bytearray:
 		return None
 
 	crc = response[resp_len - 2]
+	response_body = convert(response_body)
 	# possible trouble
 	if crc != crc8(response_body):
 		print("response: crc failed")
@@ -140,9 +161,28 @@ def bcd_decode(bcd_byte: int)-> int:
 	return res
 
 
-def parse_get_energy_data(data: bytearray) -> list:
-	day = bcd_decode(data[0])
-	month = bcd_decode(data[1])
-	year = bcd_decode(data[2])
+def parse_get_energy_data(data: bytearray) -> int:
+	#day = bcd_decode(data[0])
+	#month = bcd_decode(data[1])
+	#year = bcd_decode(data[2])
 	energy = int.from_bytes(data[3:], byteorder='little', signed=False)
-	return list[day, month, year, energy]
+	return energy
+
+
+def get_energy_data(tariff: int, daily: bool, total: bool) -> int:
+	if tariff < 0 or tariff > 5:
+		print("invalid tariff:", tariff)
+		return None
+	if total == True:
+		options = "000"
+	else:
+		options = "800"
+	if daily == True:
+		type = "012F"
+	else:
+		type = "0130"
+	data = send_request(request_type=type, request_data=options + str(tariff))
+	if data != None:
+		return parse_get_energy_data(data)
+	else:
+		return -1
